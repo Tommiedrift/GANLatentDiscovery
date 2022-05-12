@@ -6,7 +6,6 @@ from matplotlib import pyplot as plt
 from PIL import Image
 import io
 import os
-
 from torch_tools.visualization import to_image
 
 from utils import make_noise, one_hot
@@ -26,8 +25,14 @@ def interpolate(G, z, shifts_r, shifts_count, dim, deformator=None, with_central
         if deformator is not None:
             latent_shift = deformator(one_hot(deformator.input_dim, shift, dim).cuda())
         else:
-            latent_shift = one_hot(G.dim_shift, shift, dim).cuda()
-        shifted_image = G.gen_shifted(z, latent_shift).cpu()[0]
+            latent_shift = one_hot(G.w_dim, shift, dim).cuda()
+        
+        w = G.mapping(z, None)
+        #print(w.shape)
+        #print(latent_shift.shape)
+        #print(latent_shift.unsqueeze(1).shape)
+        #print(w[:, 0, :] == w[:, 1, :])
+        shifted_image = G.synthesis(w + latent_shift.unsqueeze(1))[0]
         if shift == 0.0 and with_central_border:
             shifted_image = add_border(shifted_image)
 
@@ -54,12 +59,12 @@ def make_interpolation_chart(G, deformator=None, z=None,
     if with_deformation:
         deformator_is_training = deformator.training
         deformator.eval()
-    z = z if z is not None else make_noise(1, G.dim_z).cuda()
+    z = z if z is not None else make_noise(1, G.z_dim).cuda()
 
     if with_deformation:
-        original_img = G(z).cpu()
+        original_img = G(z, None).cpu()
     else:
-        original_img = G(z).cpu()
+        original_img = G(z, None).cpu()
     imgs = []
     if dims is None:
         dims = range(dims_count)
@@ -87,12 +92,12 @@ def make_interpolation_chart(G, deformator=None, z=None,
 
 
 @torch.no_grad()
-def inspect_all_directions(G, deformator, out_dir, zs=None, num_z=3, shifts_r=8.0):
+def inspect_all_directions(G, deformator, out_dir, max_dir, zs=None, num_z=3, shifts_r=8.0):
     os.makedirs(out_dir, exist_ok=True)
 
     step = 20
-    max_dim = G.dim_shift
-    zs = zs if zs is not None else make_noise(num_z, G.dim_z).cuda()
+    max_dim = max_dir
+    zs = zs if zs is not None else make_noise(num_z, G.z_dim).cuda()
     shifts_count = zs.shape[0]
 
     for start in range(0, max_dim - 1, step):
@@ -123,7 +128,7 @@ def gen_animation(G, deformator, direction_index, out_file, z=None, size=None, r
     import imageio
 
     if z is None:
-        z = torch.randn([1, G.dim_z], device='cuda')
+        z = torch.randn([1, G.z_dim], device='cuda')
     interpolation_deformed = interpolate(
         G, z, shifts_r=r, shifts_count=5,
         dim=direction_index, deformator=deformator, with_central_border=False)

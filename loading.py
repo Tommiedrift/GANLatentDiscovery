@@ -1,7 +1,8 @@
 import os
 import json
 import torch
-
+import legacy
+import dnnlib
 from constants import DEFORMATOR_TYPE_DICT, HUMAN_ANNOTATION_FILE, WEIGHTS
 from latent_deformator import LatentDeformator
 from latent_shift_predictor import LatentShiftPredictor, LeNetShiftPredictor
@@ -23,7 +24,7 @@ def load_generator(args, G_weights):
     return G
 
 
-def load_from_dir(root_dir, model_index=None, G_weights=None, shift_in_w=True):
+def load_from_dir(root_dir, plk, model_index=None, G_weights=None, shift_in_w=True):
     args = json.load(open(os.path.join(root_dir, 'args.json')))
     args['w_shift'] = shift_in_w
 
@@ -34,29 +35,32 @@ def load_from_dir(root_dir, model_index=None, G_weights=None, shift_in_w=True):
             [int(name.split('.')[0].split('_')[-1]) for name in models
              if name.startswith('deformator')])
 
-    if G_weights is None:
-        G_weights = args['gan_weights']
-    if G_weights is None or not os.path.isfile(G_weights):
-        print('Using default local G weights')
-        G_weights = WEIGHTS[args['gan_type']]
-        if isinstance(G_weights, dict):
-            G_weights = G_weights[str(args['resolution'])]
+    #device = torch.device('cuda')
+    with dnnlib.util.open_url(plk) as f:
+        G = legacy.load_network_pkl(f)['G_ema'] #.to(device) # type: ignore
+    # if G_weights is None:
+    #     G_weights = args['gan_weights']
+    # if G_weights is None or not os.path.isfile(G_weights):
+    #     print('Using default local G weights')
+    #     G_weights = WEIGHTS[args['gan_type']]
+    #     if isinstance(G_weights, dict):
+    #         G_weights = G_weights[str(args['resolution'])]
 
-    if 'resolution' not in args.keys():
-        args['resolution'] = 128
+    # if 'resolution' not in args.keys():
+    #     args['resolution'] = 128
 
-    G = load_generator(args, G_weights)
+    # G = load_generator(args, G_weights)
     deformator = LatentDeformator(
-        shift_dim=G.dim_shift,
+        shift_dim=G.w_dim,
         input_dim=args['directions_count'] if 'directions_count' in args.keys() else None,
         out_dim=args['max_latent_dim'] if 'max_latent_dim' in args.keys() else None,
         type=DEFORMATOR_TYPE_DICT[args['deformator']])
 
     if 'shift_predictor' not in args.keys() or args['shift_predictor'] == 'ResNet':
-        shift_predictor = LatentShiftPredictor(G.dim_shift)
+        shift_predictor = LatentShiftPredictor(G.w_dim)
     elif args['shift_predictor'] == 'LeNet':
         shift_predictor = LeNetShiftPredictor(
-            G.dim_shift, 1 if args['gan_type'] == 'SN_MNIST' else 3)
+            G.w_dim, 1 if args['gan_type'] == 'SN_MNIST' else 3)
 
     deformator_model_path = os.path.join(models_dir, 'deformator_{}.pt'.format(model_index))
     shift_model_path = os.path.join(models_dir, 'shift_predictor_{}.pt'.format(model_index))
@@ -68,14 +72,16 @@ def load_from_dir(root_dir, model_index=None, G_weights=None, shift_in_w=True):
             torch.load(shift_model_path, map_location=torch.device('cpu')))
 
     setattr(deformator, 'annotation',
-            load_human_annotation(os.path.join(root_dir, HUMAN_ANNOTATION_FILE)))
+            load_human_annotation(os.path.join(root_dir, 'human_an.txt')))
 
     return deformator.eval().cuda(), G.eval().cuda(), shift_predictor.eval().cuda()
 
 
 def load_human_annotation(txt_file, verbose=False):
     annotation_dict = {}
+    print("test0")
     if os.path.isfile(txt_file):
+        print("test")
         with open(txt_file) as source:
             for line in source.readlines():
                 indx_str, annotation = line.split(': ')

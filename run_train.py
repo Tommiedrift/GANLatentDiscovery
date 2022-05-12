@@ -7,13 +7,14 @@ import matplotlib
 matplotlib.use("Agg")
 
 from constants import DEFORMATOR_TYPE_DICT, SHIFT_DISTRIDUTION_DICT, WEIGHTS
-from loading import load_generator
+#from loading import load_generator
 from latent_deformator import LatentDeformator
 from latent_shift_predictor import LatentShiftPredictor, LeNetShiftPredictor
 from trainer import Trainer, Params
 from visualization import inspect_all_directions
 from utils import make_noise, save_command_run_params
-
+import dnnlib
+import legacy 
 
 def main():
     parser = argparse.ArgumentParser(description='Latent space rectification')
@@ -22,9 +23,8 @@ def main():
         parser.add_argument('--{}'.format(key), type=target_type, default=None)
 
     parser.add_argument('--out', type=str, required=True, help='results directory')
+    parser.add_argument('--pkl', type=str, required=True, help='network pickle')
     parser.add_argument('--gan_type', type=str, choices=WEIGHTS.keys(), help='generator model type')
-    parser.add_argument('--gan_weights', type=str, default=None, help='path to generator weights')
-
     parser.add_argument('--deformator', type=str, default='ortho',
                         choices=DEFORMATOR_TYPE_DICT.keys(), help='deformator type')
     parser.add_argument('--deformator_random_init', type=bool, default=True)
@@ -49,6 +49,8 @@ def main():
                         help='generator out images resolution. Required only for StyleGAN2')
 
     args = parser.parse_args()
+    #print(args.directions_count)
+    #print(args.max_latent_dim)
     torch.cuda.set_device(args.device)
     random.seed(args.seed)
     torch.random.manual_seed(args.seed)
@@ -56,14 +58,26 @@ def main():
     save_command_run_params(args)
 
     # init models
-    if args.gan_weights is not None:
-        weights_path = args.gan_weights
-    else:
-        weights_path = WEIGHTS[args.gan_type]
+    # if args.gan_weights is not None:
+    #     weights_path = args.gan_weights
+    # else:
+    #     weights_path = WEIGHTS[args.gan_type]
+    #print("HOI")
+    #weight_dict = generator.state_dict()
+    #G = load_generator(args.__dict__, weights_path)
+    device = torch.device('cuda')
+    with dnnlib.util.open_url(args.pkl) as f:
+        G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
+    # device = torch.device('cuda')
+    # with dnnlib.util.open_url(args.pkl) as f:
+    #     G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
+    #print("hoi")
+    # shift_dim, input_dim=None, out_dim=None, inner_dim=256,
+    #              type=DeformatorType.FC, random_init=False, bias=True
+        # def __init__(self, shift_dim, input_dim=None, out_dim=None, inner_dim=1024,
+        #          type=DeformatorType.FC, random_init=False, bias=True):
 
-    G = load_generator(args.__dict__, weights_path)
-
-    deformator = LatentDeformator(shift_dim=G.dim_shift,
+    deformator = LatentDeformator(shift_dim=G.w_dim,
                                   input_dim=args.directions_count,
                                   out_dim=args.max_latent_dim,
                                   type=DEFORMATOR_TYPE_DICT[args.deformator],
@@ -93,12 +107,12 @@ def main():
 def save_results_charts(G, deformator, params, out_dir):
     deformator.eval()
     G.eval()
-    z = make_noise(3, G.dim_z, params.truncation).cuda()
+    z = make_noise(3, G.z_dim, params.truncation).cuda()
     inspect_all_directions(
-        G, deformator, os.path.join(out_dir, 'charts_s{}'.format(int(params.shift_scale))),
+        G, deformator, os.path.join(out_dir, 'charts_s{}'.format(int(params.shift_scale))), params.directions_count,
         zs=z, shifts_r=params.shift_scale)
     inspect_all_directions(
-        G, deformator, os.path.join(out_dir, 'charts_s{}'.format(int(3 * params.shift_scale))),
+        G, deformator, os.path.join(out_dir, 'charts_s{}'.format(int(3 * params.shift_scale))), params.directions_count,
         zs=z, shifts_r=3 * params.shift_scale)
 
 
