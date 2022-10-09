@@ -14,7 +14,7 @@ from latent_deformator import DeformatorType
 
 class ShiftDistribution(Enum):
     NORMAL = 0,
-    UNIFORM = 1,
+    UNIFORM = 1
 
 
 class Params(object):
@@ -26,7 +26,7 @@ class Params(object):
         self.deformator_lr = 0.0001
         self.shift_predictor_lr = 0.0001
         self.n_steps = 50000 #int(1e+5)
-        self.batch_size = 32
+        self.batch_size = 16
 
         self.directions_count = None
         self.max_latent_dim = None
@@ -38,6 +38,10 @@ class Params(object):
         self.steps_per_save = 1000
         self.steps_per_img_log = 1000
         self.steps_per_backup = 1000
+        # self.steps_per_log = 1
+        # self.steps_per_save = 1
+        # self.steps_per_img_log = 1
+        # self.steps_per_backup = 1
 
         #self.shift_dims = None
         self.truncation = None
@@ -68,10 +72,10 @@ class Trainer(object):
         self.out_json = os.path.join(self.log_dir, 'stat.json')
         self.fixed_test_noise = None
         
-
-    def make_shifts(self, latent_dim):
-        target_indices = torch.randint(
-            0, self.p.directions_count, [self.p.batch_size], device='cuda')
+    def test_shift(self, latent_dim, target, b_size):
+        target_indices = torch.ones(b_size, device='cuda') * float(target)
+        target_indices = target_indices.long()
+        #print(target_indices)
         if self.p.shift_distribution == ShiftDistribution.NORMAL:
             shifts = torch.randn(target_indices.shape, device='cuda')
         elif self.p.shift_distribution == ShiftDistribution.UNIFORM:
@@ -89,9 +93,12 @@ class Trainer(object):
 
         z_shift = torch.zeros([self.p.batch_size] + latent_dim, device='cuda')
         for i, (index, val) in enumerate(zip(target_indices, shifts)):
+            #print(index)
+            #print(type(index))
             z_shift[i][index] += val
 
         return target_indices, shifts, z_shift
+
 
     def log_train(self, step, should_print=True, stats=()):
         if should_print:
@@ -112,7 +119,7 @@ class Trainer(object):
             self.fixed_test_noise = noise.clone()
         for z, prefix in zip([noise, self.fixed_test_noise], ['rand', 'fixed']):
             fig = make_interpolation_chart(
-                G, deformator, z=z, shifts_r=3 * self.p.shift_scale, shifts_count=3, dims_count=15,
+                G, deformator, z=z, shifts_r=3 * self.p.shift_scale, shifts_count=3, dims_count=16,
                 dpi=500)
 
             self.writer.add_figure('{}_deformed_interpolation'.format(prefix), fig, step)
@@ -169,6 +176,33 @@ class Trainer(object):
         if step % self.p.steps_per_save == 0 and step > 0:
             self.save_models(deformator, shift_predictor, step)
 
+    def make_shifts(self, latent_dim):
+        target_indices = torch.randint(
+            0, self.p.directions_count, [self.p.batch_size], device='cuda')
+        #print(target_indices)
+        if self.p.shift_distribution == ShiftDistribution.NORMAL:
+            shifts = torch.randn(target_indices.shape, device='cuda')
+        elif self.p.shift_distribution == ShiftDistribution.UNIFORM:
+            shifts = 2.0 * torch.rand(target_indices.shape, device='cuda') - 1.0
+
+        shifts = self.p.shift_scale * shifts
+        shifts[(shifts < self.p.min_shift) & (shifts > 0)] = self.p.min_shift
+        shifts[(shifts > -self.p.min_shift) & (shifts < 0)] = -self.p.min_shift
+
+        try:
+            latent_dim[0]
+            latent_dim = list(latent_dim)
+        except Exception:
+            latent_dim = [latent_dim]
+
+        z_shift = torch.zeros([self.p.batch_size] + latent_dim, device='cuda')
+        for i, (index, val) in enumerate(zip(target_indices, shifts)):
+            #print(val)
+            #print(type(val))
+            z_shift[i][index] += val
+
+        return target_indices, shifts, z_shift
+
     def train(self, G, deformator, shift_predictor, multi_gpu=False):
         G.cuda().eval()
         deformator.cuda().train()
@@ -192,36 +226,37 @@ class Trainer(object):
             G.zero_grad()
             deformator.zero_grad()
             shift_predictor.zero_grad()
-            #print(G.mapping.z_dim)
+            
             z = make_noise(self.p.batch_size, G.z_dim, self.p.truncation).cuda()
             target_indices, shifts, basis_shift = self.make_shifts(deformator.input_dim)
-
             if should_gen_classes:
                 classes = G.mixed_classes(z.shape[0])
 
             # Deformation
-            shift = deformator(basis_shift)
-            #print(G.mapping.num_layers)
-            # print(G.mapping.z_dim)
-            # print(G.mapping.w_dim)
-            # print(G.mapping.num_ws)
-            # print("z.shape: ", z.shape)
-            # print("shift.shape: ", shift.shape)
+            #print(basis_shift)
+            
+            #print(shift.shape)
             if should_gen_classes:
                 imgs = G(z, classes)
-                #imgs_shifted = G(z + shift, classes)
                 w = G.mapping(z, classes)
-                imgs_shifted = G.synthesis(w + shift.unsqueeze(1))
             else:
                 imgs = G(z, None)
                 w = G.mapping(z, None)
-                imgs_shifted = G.synthesis(w + shift.unsqueeze(1))
-                #print("w.shape:", w.shape)
-                #print(imgs_shifted.shape)
 
+            #dim = torch.nonzero(basis_shift)
+            #print(dim)
+            shift = deformator(basis_shift)
+            #print(torch.norm(shift, dim=2, keepdim=True))
+            if w.shape == shift.shape:
+                #print(w.shape)
+                #print(shift.shape)
+                imgs_shifted = G.synthesis(w + shift)
+                #print(imgs_shifted.shape)
+            else:
+                shift = shift.unsqueeze(1)
+                imgs_shifted = G.synthesis(w + shift)
             logits, shift_prediction = shift_predictor(imgs, imgs_shifted)
             logit_loss = self.p.label_weight * self.cross_entropy(logits, target_indices)
-            #print(target_indices.shape, logits.shape)
             shift_loss = self.p.shift_weight * torch.mean(torch.abs(shift_prediction - shifts))
 
             # total loss
@@ -245,6 +280,7 @@ class Trainer(object):
 @torch.no_grad()
 def validate_classifier(G, deformator, shift_predictor, params_dict=None, trainer=None):
     n_steps = 100
+    #n_steps = 100
     if trainer is None:
         trainer = Trainer(params=Params(**params_dict), verbose=False)
 
@@ -252,12 +288,32 @@ def validate_classifier(G, deformator, shift_predictor, params_dict=None, traine
     for step in range(n_steps):
         z = make_noise(trainer.p.batch_size, G.z_dim, trainer.p.truncation).cuda()
         target_indices, shifts, basis_shift = trainer.make_shifts(deformator.input_dim)
-
         imgs = G(z, None)
         w = G.mapping(z, None)
-        imgs_shifted = G.synthesis(w + deformator(basis_shift).unsqueeze(1))
+        shift = deformator(basis_shift)
+        if w.shape == shift.shape:
+            imgs_shifted = G.synthesis(w + deformator(basis_shift))
+        else:
+            imgs_shifted = G.synthesis(w + shift.unsqueeze(1))
 
         logits, _ = shift_predictor(imgs, imgs_shifted)
         percents[step] = (torch.argmax(logits, dim=1) == target_indices).to(torch.float32).mean()
 
+    # all_per = []
+    # for i in range(deformator.input_dim):
+    #     percents = torch.empty([n_steps])
+    #     for step in range(n_steps):
+    #         z = make_noise(trainer.p.batch_size, G.z_dim, trainer.p.truncation).cuda()
+    #         target_indices, shifts, basis_shift = trainer.test_shift(deformator.input_dim, i)
+
+    #         imgs = G(z, None)
+    #         w = G.mapping(z, None)
+    #         imgs_shifted = G.synthesis(w + deformator(basis_shift).unsqueeze(1))
+
+    #         logits, _ = shift_predictor(imgs, imgs_shifted)
+    #         percents[step] = (torch.argmax(logits, dim=1) == target_indices).to(torch.float32).mean()
+    #     print(i, percents.mean())
+    #     all_per.append(percents.mean())
+    # print("all")
+    # print(all_per)
     return percents.mean()

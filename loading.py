@@ -24,19 +24,18 @@ def load_generator(args, G_weights):
     return G
 
 
-def load_from_dir(root_dir, plk, model_index=None, G_weights=None, shift_in_w=True):
+def load_from_dir(root_dir, pkl, multi_layer, all_layer, dims = None, w_var = None, model_index=None, G_weights=None, shift_in_w=True):
     args = json.load(open(os.path.join(root_dir, 'args.json')))
     args['w_shift'] = shift_in_w
-
+    print("load from dir")
+    print(multi_layer)
     models_dir = os.path.join(root_dir, 'models')
     if model_index is None:
         models = os.listdir(models_dir)
-        model_index = max(
-            [int(name.split('.')[0].split('_')[-1]) for name in models
-             if name.startswith('deformator')])
+        model_index = max([int(name.split('.')[0].split('_')[-1]) for name in models if name.startswith('deformator')])
 
     #device = torch.device('cuda')
-    with dnnlib.util.open_url(plk) as f:
+    with dnnlib.util.open_url(pkl) as f:
         G = legacy.load_network_pkl(f)['G_ema'] #.to(device) # type: ignore
     # if G_weights is None:
     #     G_weights = args['gan_weights']
@@ -48,16 +47,38 @@ def load_from_dir(root_dir, plk, model_index=None, G_weights=None, shift_in_w=Tr
 
     # if 'resolution' not in args.keys():
     #     args['resolution'] = 128
+    covar = None
+    if w_var is not None:
+        #covar = torch.load(args.w_var)
+        # print('busy')
+        # amount = 100000
+        # covars_one = torch.zeros([G.z_dim, G.z_dim])
+        # all_wone = torch.zeros([G.z_dim, amount])
+        # zs = torch.randn([amount, G.z_dim])
+        # for index, z in enumerate(zs):
+        #     w = G.mapping(z.unsqueeze(0), None)
+        #     all_wone[:, index] = w[0, 0, :]
+        # covar = torch.cov(all_wone)
+        covar = torch.load(w_var)
+    print('done')
 
     # G = load_generator(args, G_weights)
+    print(args['directions_count'])
+    print(args['max_latent_dim'])
+    print(DEFORMATOR_TYPE_DICT[args['deformator']])
     deformator = LatentDeformator(
         shift_dim=G.w_dim,
-        input_dim=args['directions_count'] if 'directions_count' in args.keys() else None,
-        out_dim=args['max_latent_dim'] if 'max_latent_dim' in args.keys() else None,
-        type=DEFORMATOR_TYPE_DICT[args['deformator']])
+        num_l = G.num_ws,
+        input_dim= args['directions_count'] if 'directions_count' in args.keys() else dims,
+        out_dim = args['max_latent_dim'] if 'max_latent_dim' in args.keys() else dims,
+        type=DEFORMATOR_TYPE_DICT[args['deformator']],
+        layer = multi_layer,
+        all_layer = all_layer,
+        w_var = covar
+        )
 
     if 'shift_predictor' not in args.keys() or args['shift_predictor'] == 'ResNet':
-        shift_predictor = LatentShiftPredictor(G.w_dim)
+        shift_predictor = LatentShiftPredictor(dims)
     elif args['shift_predictor'] == 'LeNet':
         shift_predictor = LeNetShiftPredictor(
             G.w_dim, 1 if args['gan_type'] == 'SN_MNIST' else 3)
@@ -79,9 +100,9 @@ def load_from_dir(root_dir, plk, model_index=None, G_weights=None, shift_in_w=Tr
 
 def load_human_annotation(txt_file, verbose=False):
     annotation_dict = {}
-    print("test0")
+    #print("test0")
     if os.path.isfile(txt_file):
-        print("test")
+        #print("test")
         with open(txt_file) as source:
             for line in source.readlines():
                 indx_str, annotation = line.split(': ')

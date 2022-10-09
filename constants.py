@@ -3,8 +3,7 @@ from trainer import ShiftDistribution
 
 
 HUMAN_ANNOTATION_FILE = 'human_annotation.txt'
-
-
+#test
 DEFORMATOR_TYPE_DICT = {
     'fc': DeformatorType.FC,
     'linear': DeformatorType.LINEAR,
@@ -12,6 +11,7 @@ DEFORMATOR_TYPE_DICT = {
     'ortho': DeformatorType.ORTHO,
     'proj': DeformatorType.PROJECTIVE,
     'random': DeformatorType.RANDOM,
+    'wspace': DeformatorType.WSPACE
 }
 
 

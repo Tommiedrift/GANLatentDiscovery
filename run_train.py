@@ -9,7 +9,7 @@ matplotlib.use("Agg")
 from constants import DEFORMATOR_TYPE_DICT, SHIFT_DISTRIDUTION_DICT, WEIGHTS
 #from loading import load_generator
 from latent_deformator import LatentDeformator
-from latent_shift_predictor import LatentShiftPredictor, LeNetShiftPredictor
+from latent_shift_predictor import LatentShiftPredictor, LeNetShiftPredictor, LatentLayerShiftPredictor
 from trainer import Trainer, Params
 from visualization import inspect_all_directions
 from utils import make_noise, save_command_run_params
@@ -47,44 +47,51 @@ def main():
                         help='latent directions search in w-space for StyleGAN2')
     parser.add_argument('--gan_resolution', type=int, default=1024,
                         help='generator out images resolution. Required only for StyleGAN2')
-
+    parser.add_argument('--multi_layer', type=bool, default=False)
+    parser.add_argument('--all_layer', type=bool, default=False)
+    parser.add_argument('--w_var', type=bool, default=False)
     args = parser.parse_args()
-    #print(args.directions_count)
-    #print(args.max_latent_dim)
+    
+    #'/dataB1/tommie/w_stats/100k/w_covar_tensor_0.pt'
     torch.cuda.set_device(args.device)
     random.seed(args.seed)
     torch.random.manual_seed(args.seed)
-
     save_command_run_params(args)
-
-    # init models
-    # if args.gan_weights is not None:
-    #     weights_path = args.gan_weights
-    # else:
-    #     weights_path = WEIGHTS[args.gan_type]
-    #print("HOI")
-    #weight_dict = generator.state_dict()
-    #G = load_generator(args.__dict__, weights_path)
     device = torch.device('cuda')
     with dnnlib.util.open_url(args.pkl) as f:
         G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
-    # device = torch.device('cuda')
-    # with dnnlib.util.open_url(args.pkl) as f:
-    #     G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
-    #print("hoi")
-    # shift_dim, input_dim=None, out_dim=None, inner_dim=256,
-    #              type=DeformatorType.FC, random_init=False, bias=True
-        # def __init__(self, shift_dim, input_dim=None, out_dim=None, inner_dim=1024,
-        #          type=DeformatorType.FC, random_init=False, bias=True):
+        
+    covar = None
+    #covars = None
+    if args.w_var:
+        #covar = torch.load('/dataB1/tommie/w_stats/w_covar_1million2.pt)
+        print("busy")
+        amount = 1000000
+        covars_one = torch.zeros([G.z_dim, G.z_dim], device='cuda')
+        all_wone = torch.zeros([G.z_dim, amount], device='cuda')
+        zs = torch.randn([amount, G.z_dim], device='cuda')
+        for index, z in enumerate(zs):
+            w = G.mapping(z.unsqueeze(0), None)
+            all_wone[:, index] = w[0, 0, :]
+        covar = torch.cov(all_wone)
+        torch.save(covar, '{}/{}.pt'.format('/dataB1/tommie/w_stats', 'w_covar_1million2'))
+        print("saved")
 
     deformator = LatentDeformator(shift_dim=G.w_dim,
-                                  input_dim=args.directions_count,
-                                  out_dim=args.max_latent_dim,
-                                  type=DEFORMATOR_TYPE_DICT[args.deformator],
-                                  random_init=args.deformator_random_init).cuda()
+                                num_l = G.num_ws,
+                                layer = args.multi_layer,
+                                all_layer = args.all_layer,
+                                input_dim=args.directions_count,
+                                out_dim=args.max_latent_dim,
+                                type=DEFORMATOR_TYPE_DICT[args.deformator],
+                                random_init=args.deformator_random_init,
+                                w_var = covar).cuda()
 
     if args.shift_predictor == 'ResNet':
         shift_predictor = LatentShiftPredictor(
+            deformator.input_dim, args.shift_predictor_size).cuda()
+    elif args.shift_predictor == 'ResNetLayer':
+        shift_predictor = LatentLayerShiftPredictor(
             deformator.input_dim, args.shift_predictor_size).cuda()
     elif args.shift_predictor == 'LeNet':
         shift_predictor = LeNetShiftPredictor(
@@ -92,7 +99,6 @@ def main():
 
     # training
     args.shift_distribution = SHIFT_DISTRIDUTION_DICT[args.shift_distribution_key]
-
     params = Params(**args.__dict__)
     # update dims with respect to the deformator if some of params are None
     params.directions_count = int(deformator.input_dim)
